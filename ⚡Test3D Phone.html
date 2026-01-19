@@ -1,0 +1,153 @@
+<By @patraoyt1>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>⚡Test3D Phone</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; color: #00d4ff; font-family: sans-serif; overflow: hidden; touch-action: none; }
+        
+        /* Painel de FPS */
+        #fps-box { 
+            position: absolute; top: 20px; left: 20px; 
+            background: rgba(0, 0, 0, 0.8); padding: 12px;
+            border-radius: 8px; border-left: 4px solid #00d4ff;
+            z-index: 10; backdrop-filter: blur(10px); pointer-events: none;
+        }
+        .stat { display: block; margin-bottom: 5px; }
+        .label { font-size: 0.65rem; color: #888; text-transform: uppercase; }
+        .val { font-size: 1.3rem; font-weight: bold; display: block; }
+        
+        /* NOVOS BALÕES DE VEREDITO NA PARTE INFERIOR */
+        #verdict-container {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 15px; z-index: 10; width: 90%; justify-content: center;
+            pointer-events: none;
+        }
+        .badge {
+            background: rgba(255,255,255,0.1); color: #aaa;
+            padding: 12px 20px; border-radius: 30px;
+            font-weight: bold; text-transform: uppercase; font-size: 0.9rem;
+            backdrop-filter: blur(10px); border: 2px solid transparent;
+            transition: all 0.5s ease; opacity: 0.5; display: flex; align-items: center;
+        }
+        /* Estilo Ativo: Fraco */
+        .badge.active-weak {
+            background: linear-gradient(135deg, #ff4b1f, #ff9068);
+            color: white; opacity: 1; border-color: #ff4b1f;
+            box-shadow: 0 0 25px rgba(255, 75, 31, 0.6); transform: scale(1.05);
+        }
+        /* Estilo Ativo: Forte */
+        .badge.active-strong {
+            background: linear-gradient(135deg, #11998e, #38ef7d);
+            color: white; opacity: 1; border-color: #38ef7d;
+            box-shadow: 0 0 25px rgba(56, 239, 125, 0.6); transform: scale(1.05);
+        }
+
+        canvas { display: block; width: 100vw; height: 100vh; object-fit: cover; }
+    </style>
+</head>
+<body>
+
+    <div id="fps-box">
+        <div class="stat"><span class="label">FPS Real</span><span class="val" id="fps-val">0</span></div>
+        <div class="stat" style="border-top: 1px solid #333; padding-top: 5px;">
+            <span class="label">Média Total</span><span class="val" id="avg-val" style="color: #0f0;">0</span>
+        </div>
+    </div>
+
+    <div id="verdict-container">
+        <div id="badge-weak" class="badge">🐌 Fraco (1-30 FPS)</div>
+        <div id="badge-strong" class="badge">🚀 Forte (31-120 FPS)</div>
+    </div>
+
+    <canvas id="c"></canvas>
+
+    <script>
+        const canvas = document.getElementById('c');
+        const gl = canvas.getContext('webgl');
+        const fpsDisplay = document.getElementById('fps-val');
+        const avgDisplay = document.getElementById('avg-val');
+        // Referências aos novos balões
+        const badgeWeak = document.getElementById('badge-weak');
+        const badgeStrong = document.getElementById('badge-strong');
+
+        let frames = 0, lastTime = 0, totalFrames = 0, startTime = 0;
+        const TARGET_HEIGHT = 2160;
+        let rotationX = 0, rotationY = 0, lastX = 0, lastY = 0, isDragging = false;
+
+        const vs = `attribute vec2 p; void main(){ gl_Position=vec4(p,0,1); }`;
+        const fs = `
+            precision highp float; uniform float t; uniform vec2 r; uniform vec2 rot;
+            mat2 rotMat(float a) { return mat2(cos(a), -sin(a), sin(a), cos(a)); }
+            float map(vec3 p) {
+                vec3 w = p; float m = dot(w,w); float dz = 1.0;
+                for (int i = 0; i < 10; i++) {
+                    dz = 8.0 * pow(sqrt(m), 7.0) * dz + 1.0; float r = length(w);
+                    float b = 8.0 * acos(clamp(w.y / r, -1.0, 1.0)); float a = 8.0 * atan(w.x, w.z);
+                    w = p + pow(r, 8.0) * vec3(sin(b)*sin(a), cos(b), sin(b)*cos(a));
+                    m = dot(w,w); if (m > 4.0) break;
+                } return 0.25 * log(m) * sqrt(m) / dz;
+            }
+            vec3 getNormal(vec3 p) { vec2 e = vec2(0.001, 0.0); return normalize(vec3(map(p+e.xyy)-map(p-e.xyy), map(p+e.yxy)-map(p-e.yxy), map(p+e.yyx)-map(p-e.yyx))); }
+            void main(){
+                vec2 uv = (gl_FragCoord.xy - 0.5 * r) / min(r.y, r.x); vec3 ro = vec3(0.0, 0.0, -3.5); vec3 rd = normalize(vec3(uv, 1.2));
+                rd.xz *= rotMat(rot.x); rd.zy *= rotMat(rot.y); ro.xz *= rotMat(rot.x); ro.zy *= rotMat(rot.y);
+                float d = 0.0, t_dist = 0.0;
+                for(int i=0; i<100; i++){ d = map(ro + rd * t_dist); if(d < 0.001 || t_dist > 10.0) break; t_dist += d; }
+                vec3 col = vec3(0.01);
+                if(t_dist < 10.0) {
+                    vec3 p = ro + rd * t_dist; vec3 n = getNormal(p); vec3 light = normalize(vec3(1.0, 1.0, -1.0));
+                    float diff = max(dot(n, light), 0.1);
+                    vec3 baseCol = 0.5 + 0.5 * cos(t + p.xyy + vec3(0,2,4));
+                    col = baseCol * diff + pow(max(dot(reflect(-light, n), -rd), 0.0), 32.0);
+                } gl_FragColor = vec4(pow(col, vec3(0.4545)), 1.0);
+            }
+        `;
+
+        function setup() {
+            const createS = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; };
+            const prog = gl.createProgram(); gl.attachShader(prog, createS(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, createS(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(prog); gl.useProgram(prog);
+            const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(gl.getAttribLocation(prog, 'p')); gl.vertexAttribPointer(gl.getAttribLocation(prog, 'p'), 2, gl.FLOAT, false, 0, 0); return prog;
+        }
+        const program = setup(); const tLoc = gl.getUniformLocation(program, 't'), rLoc = gl.getUniformLocation(program, 'r'), rotLoc = gl.getUniformLocation(program, 'rot');
+
+        window.addEventListener('touchstart', (e) => { isDragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; });
+        window.addEventListener('touchmove', (e) => { if (!isDragging) return; rotationX += (e.touches[0].clientX - lastX) * 0.005; rotationY += (e.touches[0].clientY - lastY) * 0.005; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; });
+        window.addEventListener('touchend', () => { isDragging = false; });
+        function resize() { const aspect = window.innerWidth / window.innerHeight; canvas.width = Math.round(TARGET_HEIGHT * aspect); canvas.height = TARGET_HEIGHT; gl.viewport(0, 0, canvas.width, canvas.height); }
+
+        function render(now) {
+            if (startTime === 0) startTime = now;
+            if (!isDragging) rotationX += 0.005;
+
+            gl.uniform1f(tLoc, now * 0.001); gl.uniform2f(rLoc, canvas.width, canvas.height); gl.uniform2f(rotLoc, rotationX, rotationY);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            
+            frames++; totalFrames++;
+            if(now - lastTime > 1000) {
+                fpsDisplay.innerText = frames;
+                let average = Math.round(totalFrames / ((now - startTime) / 1000));
+                avgDisplay.innerText = average;
+                
+                // --- LÓGICA DO VEREDITO ---
+                // Reseta os estados
+                badgeWeak.classList.remove('active-weak');
+                badgeStrong.classList.remove('active-strong');
+
+                // Aplica o estado baseado na média
+                if (average > 0 && average <= 30) {
+                    badgeWeak.classList.add('active-weak');
+                } else if (average > 30) {
+                    badgeStrong.classList.add('active-strong');
+                }
+                
+                frames = 0; lastTime = now;
+            }
+            requestAnimationFrame(render);
+        }
+        window.addEventListener('resize', resize); resize(); requestAnimationFrame(render);
+    </script>
+</body>
+</html>
